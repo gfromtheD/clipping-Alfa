@@ -1,0 +1,34 @@
+[
+  {
+    "Path": "C:\\Users\\gfrom\\Desktop\\clipping-Alfa\\backups\\pre-integral-audit-20260810\\fix_step4.py",
+    "Hash": "272E5D01A0A89964FF9C2EEAE7D166D6A475468855547C1C1B88EDB8D5C6D276"
+  },
+  {
+    "Path": "C:\\Users\\gfrom\\Desktop\\clipping-Alfa\\backups\\pre-integral-audit-20260810\\requirements.lock.txt",
+    "Hash": "7B0836EEC772C528319A73F72EBDD19078B516E0C9EEFAC9C4D0F479931B1E29"
+  },
+  {
+    "Path": "C:\\Users\\gfrom\\Desktop\\clipping-Alfa\\backups\\pre-integral-audit-20260810\\scripts\\add_subtitles.py",
+    "Hash": "1B6CBF0906DE6C4F8386031257688C4A39DECBF5226F933240251E721000CADA"
+  },
+  {
+    "Path": "C:\\Users\\gfrom\\Desktop\\clipping-Alfa\\backups\\pre-integral-audit-20260810\\scripts\\batch_clips.py",
+    "Hash": "5B18EF7CA45AA1502FB20CC9ACCD1153B47F93004E5DCF9ED6EAD705051053D9"
+  },
+  {
+    "Path": "C:\\Users\\gfrom\\Desktop\\clipping-Alfa\\backups\\pre-integral-audit-20260810\\scripts\\make_clip.py",
+    "Hash": "CD8958E1A24B46B01FCB1601B98F3CDD7DECAA1C085EBD84E7CF822F266E0C52"
+  },
+  {
+    "Path": "C:\\Users\\gfrom\\Desktop\\clipping-Alfa\\backups\\pre-integral-audit-20260810\\scripts\\process_video.py",
+    "Hash": "26836EF2EBF1FDC350415C344E3C0272B37EBB2449F9B82D0BE2C652CDAC4851"
+  },
+  {
+    "Path": "C:\\Users\\gfrom\\Desktop\\clipping-Alfa\\backups\\pre-integral-audit-20260810\\scripts\\transcribe.py",
+    "Hash": "6B0AFEE5A6DCDCF454036787AF44DCD3B8115A7C85BE512F900EDD6A9B126632"
+  },
+  {
+    "Path": "C:\\Users\\gfrom\\Desktop\\clipping-Alfa\\backups\\pre-integral-audit-20260810\\scripts\\__pycache__\\add_subtitles.cpython-313.pyc",
+    "Hash": "BAFAA26CE6C188244AF484AF8BC312506450F770DCBC66537781A2C088C06C9C"
+  }
+]

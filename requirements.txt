@@ -1,0 +1,8 @@
+# Dependencias directas del pipeline. Para una instalación idéntica usa
+# requirements.lock.txt, generado para Python 3.11 y CUDA 12.6.
+--extra-index-url https://download.pytorch.org/whl/cu126
+faster-whisper==1.2.1
+whisperx==3.8.6
+torch==2.8.0+cu126
+torchaudio==2.8.0+cu126
+torchvision==0.23.0+cu126
