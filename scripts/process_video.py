@@ -1,6 +1,6 @@
 """Punto de entrada único del pipeline de clipping."""
 
-from pipeline_core import main
+from pipeline import main
 
 
 if __name__ == "__main__":
