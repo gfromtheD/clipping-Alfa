@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 input/
 output/
+node_modules/
+ui/node_modules/
+dist/
+ui/dist/
