@@ -1,0 +1,23 @@
+{
+  "version": 2,
+  "framework": "vite",
+  "buildCommand": "cd ui && npm install && npm run build",
+  "outputDirectory": "ui/dist",
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/ws/(.*)",
+      "destination": "/api/index.py"
+    },
+    {
+      "source": "/((?!api/|media/|assets/|favicon.svg).*)/",
+      "destination": "/index.html"
+    }
+  ],
+  "env": {
+    "PYTHON_VERSION": "3.11"
+  }
+}
