@@ -28,6 +28,7 @@ from config import (
     PipelineError,
     StageValidationError,
 )
+from downloader import download_youtube
 from highlights import select_clips
 from registry import RegistryManager, RunState, source_signature, video_id
 from transcriber import align_transcript, transcribe_video
@@ -172,6 +173,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Pipeline atómico de clipping vertical y subtítulos sincronizados (sin LLM)."
     )
     parser.add_argument("--input", type=Path, help="Vídeo concreto. Si se omite, procesa los vídeos de input/.")
+    parser.add_argument("--youtube-url", type=str, help="URL de YouTube para descargar y procesar")
     parser.add_argument("--language", default="auto", help="Idioma esperado (ej. es, en) o 'auto'. Se valida contra la detección.")
     parser.add_argument("--model", default="small", help="Modelo Faster-Whisper para la transcripción.")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
@@ -221,14 +223,29 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Punto de ejecución principal del CLI."""
+    """Punto de ejecución principal del CLI.
+
+    Ejemplos de uso:
+    - Procesar vídeos locales:
+        python scripts/process_video.py --input input/prueba.mp4 --language en
+    - Descargar y procesar desde YouTube:
+        python scripts/process_video.py --youtube-url "https://youtube.com/watch?v=XXXXX" --language en
+    - Procesar toda la carpeta input/ en modo automático:
+        python scripts/process_video.py --language auto
+    """
     args = parse_args(argv)
     try:
         config = config_from_args(args)
         if args.prune_work_days > 0:
             removed = prune_work(WORK_ROOT, args.prune_work_days)
             print(f"Se limpiaron {removed} directorio(s) antiguo(s) de output/.work")
-        videos = discover_videos(args.input)
+
+        if args.youtube_url:
+            downloaded = download_youtube(args.youtube_url, INPUT_DIR)
+            videos = [downloaded]
+        else:
+            videos = discover_videos(args.input)
+
         if not videos:
             print(f"No hay vídeos compatibles en: {INPUT_DIR}")
             return 0

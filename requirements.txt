@@ -6,3 +6,4 @@ whisperx==3.8.6
 torch==2.8.0+cu126
 torchaudio==2.8.0+cu126
 torchvision==0.23.0+cu126
+yt-dlp==2026.8.19

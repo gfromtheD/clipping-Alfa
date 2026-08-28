@@ -294,5 +294,40 @@ class ValidateVideoTest(unittest.TestCase):
                     validate_video(video, expected_duration=10.0, ffprobe="ffprobe", logger=None)
 
 
+class DownloaderTest(unittest.TestCase):
+    def test_extract_video_id_formats(self):
+        from downloader import extract_video_id
+        from config import PipelineError
+
+        # watch URL
+        self.assertEqual(extract_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), "dQw4w9WgXcQ")
+        # youtu.be URL
+        self.assertEqual(extract_video_id("https://youtu.be/dQw4w9WgXcQ?t=42"), "dQw4w9WgXcQ")
+        # shorts URL
+        self.assertEqual(extract_video_id("https://www.youtube.com/shorts/dQw4w9WgXcQ"), "dQw4w9WgXcQ")
+        # embed URL
+        self.assertEqual(extract_video_id("https://www.youtube.com/embed/dQw4w9WgXcQ"), "dQw4w9WgXcQ")
+        # direct ID
+        self.assertEqual(extract_video_id("dQw4w9WgXcQ"), "dQw4w9WgXcQ")
+
+        # invalid URLs
+        with self.assertRaises(PipelineError):
+            extract_video_id("")
+        with self.assertRaises(PipelineError):
+            extract_video_id("https://google.com")
+
+    def test_download_youtube_skips_if_already_exists(self):
+        from downloader import download_youtube
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            existing_file = output_dir / "dQw4w9WgXcQ.mp4"
+            existing_file.write_bytes(b"\x00" * 2048)
+
+            result = download_youtube("https://youtu.be/dQw4w9WgXcQ", output_dir)
+            self.assertEqual(result, existing_file.resolve())
+
+
 if __name__ == "__main__":
     unittest.main()
+
