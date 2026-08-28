@@ -9,7 +9,7 @@ Pipeline modular para convertir vídeos largos en clips verticales con subtítul
 ```mermaid
 flowchart TD
     subgraph Entrada["Entrada"]
-        YT[YouTube URL] --> DL[downloader.py]
+        YT[YouTube URL] --> DL[downloader.py<br/>✅ YouTube]
         INPUT[input/*.mp4] --> PIPE
         DL --> INPUT
     end
@@ -61,7 +61,7 @@ flowchart TD
 | `registry.py` | Registro transaccional, SHA-256, processed_videos.v2.json |
 | `config.py` | Configuración tipada, constantes, rutas |
 | `utils.py` | Helpers: FFmpeg, logging, GPU, IO atómico |
-| `downloader.py` | Descarga de YouTube con yt-dlp |
+| `downloader.py` | Descarga de YouTube con yt-dlp (integrado Ago 2026) |
 
 ## Flujo Principal
 
