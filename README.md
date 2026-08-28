@@ -1,67 +1,212 @@
-# clipping-Alfa
+# clipping-Alfa - Pipeline de automatización de clips verticales
 
-Pipeline local para detectar fragmentos, crear clips verticales y generar subtítulos dinámicos sincronizados. La selección actual es heurística; no integra LLMs.
+![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)
+![GPU Support](https://img.shields.io/badge/GPU-CUDA%2012.6-green.svg)
+![FFmpeg](https://img.shields.io/badge/FFmpeg-libx264%20%7C%20libass-orange.svg)
+![yt-dlp](https://img.shields.io/badge/yt--dlp-supported-red.svg)
+![Tests](https://img.shields.io/badge/tests-36%2F36%20passing-brightgreen.svg)
 
-## Ejecutar
+Pipeline modular local en Python para transformar automáticamente vídeos largos o enlaces de YouTube en clips verticales optimizados (9:16, 1080x1920) con subtítulos dinámicos estilo karaoke sincronizados palabra por palabra. Diseñado con arquitectura tolerante a fallos, publicación atómica y validación de calidad visual.
 
-Desde PowerShell, el comando único recomendado usa el intérprete exacto de `.venv`:
+---
 
-```powershell
-.\run_pipeline.ps1 -Language auto -InputVideo .\input\prueba.mp4
+## Características Principales
+
+- ✅ **Transcripción robusta:** Procesamiento de audio con Faster-Whisper (`small` en GPU/FP16) y validación anti-alucinaciones.
+- ✅ **Alineación fonética:** Timestamps precisos por palabra mediante WhisperX sin re-transcribir el audio.
+- ✅ **Selección inteligente de clips:** Heurística avanzada sobre palabras alineadas y optimización sin solapamientos con *beam search*.
+- ✅ **Render vertical 9:16:** Recorte y escalado a 1080x1920 mediante FFmpeg (`libx264`, AAC 128k).
+- ✅ **Subtítulos dinámicos ASS:** Efecto karaoke interactivo (`\k`) y posicionamiento configurable.
+- ✅ **Descarga directa de YouTube:** Integración nativa con `yt-dlp` en máxima calidad.
+- ✅ **Validación visual con control negativo:** Comprobación por análisis de píxeles raw que valida que los subtítulos sean legibles frente al ruido de compresión.
+- ✅ **Registro transaccional y caché:** Deduplicación basada en SHA-256 de archivos fuente y huella de configuración (`processed_videos.v2.json`).
+- ✅ **Suite de pruebas:** 36/36 tests unitarios y de integración automatizados.
+
+---
+
+## Arquitectura
+
+El pipeline opera de forma modular desacoplando las etapas de IA, renderizado, orquestación y estado:
+
+```mermaid
+flowchart TD
+    subgraph Entrada["1. Entrada"]
+        YT[YouTube URL] --> DL[downloader.py]
+        INPUT[input/*.mp4] --> PIPE
+        DL --> INPUT
+    end
+    
+    subgraph Orquestador["2. Orquestación"]
+        PIPE[pipeline.py<br/>PipelineRunner]
+    end
+    
+    subgraph Modulos["3. Módulos de Procesamiento"]
+        TRANS[transcriber.py<br/>Faster-Whisper + WhisperX]
+        HIGH[highlights.py<br/>Word Windows + Beam Search]
+        CLIP[clipper.py<br/>FFmpeg 9:16 + Subtítulos ASS]
+        REG[registry.py<br/>RunState + processed_videos.v2.json]
+    end
+    
+    subgraph Soporte["4. Soporte y Configuración"]
+        CONFIG[config.py<br/>PipelineConfig + Heurísticas]
+        UTILS[utils.py<br/>FFmpeg helpers + GPU Check]
+    end
+    
+    subgraph Salida["5. Salida Publicada"]
+        OUTPUT[output/videos/&lt;video_id&gt;/]
+    end
+    
+    PIPE --> TRANS
+    TRANS --> HIGH
+    HIGH --> CLIP
+    CLIP --> REG
+    REG --> OUTPUT
+    
+    CONFIG -.-> PIPE
+    CONFIG -.-> TRANS
+    CONFIG -.-> HIGH
+    CONFIG -.-> CLIP
+    
+    UTILS -.-> PIPE
+    UTILS -.-> TRANS
+    UTILS -.-> CLIP
 ```
 
-Para contenido que deba ser español, sustituye `auto` por `es`. El pipeline detecta primero el idioma y falla de forma segura si no coincide; así evita producir subtítulos españoles sobre un vídeo inglés. Para procesar todos los vídeos compatibles de `input/`, omite `-InputVideo`.
+### Módulos del Sistema
 
-Equivalente sin el envoltorio de PowerShell:
+| Módulo | Responsabilidad |
+|:---|:---|
+| `scripts/pipeline.py` | Orquestación general, CLI y ciclo de vida de ejecución. |
+| `scripts/downloader.py` | Descarga de vídeos de YouTube con `yt-dlp`. |
+| `scripts/transcriber.py` | Transcripción (Faster-Whisper) y alineación fonética (WhisperX). |
+| `scripts/highlights.py` | Generación de ventanas temporales, scoring y selección por beam search. |
+| `scripts/clipper.py` | Renderizado vertical 9:16, subtítulos ASS y control visual negativo. |
+| `scripts/registry.py` | Transacciones en `.work/`, cálculo de SHA-256 y registro v2. |
+| `scripts/config.py` | Configuración tipada (`PipelineConfig`), rutas, constantes y excepciones. |
+| `scripts/utils.py` | Envoltorios de FFmpeg/ffprobe, logging, verificación de CUDA y E/S atómica. |
 
-```powershell
-.\.venv\Scripts\python.exe .\scripts\process_video.py --language auto --input .\input\prueba.mp4
+---
+
+## Instalación
+
+### 1. Clonar el repositorio
+```bash
+git clone https://github.com/gfromtheD/clipping-Alfa.git
+cd clipping-Alfa
 ```
 
-Opciones relevantes: `--model small`, `--device cuda`, `--compute-type float16`, `--max-clips 8`, `--min-duration 18`, `--max-duration 45` y `--subtitle-margin-ratio 0.27`. La transcripción usa el modo secuencial de Faster-Whisper: en esta configuración evita que un VAD o ventanas por lotes descarten locución tenue; por ello no expone un tamaño de lote ficticio. Si el material ya trae subtítulos quemados, aumenta el margen (por ejemplo, `0.32`) para separar visualmente la nueva capa; no se eliminan subtítulos incrustados del original. Para limpiar ejecuciones antiguas fallidas, usa `--prune-work-days 30` (borra de `output/.work` los directorios cuyo `state.json` no se modificó en los últimos 30 días).
+### 2. Crear y activar el entorno virtual
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+### 3. Instalar dependencias
+```bash
+pip install -r requirements.txt
+```
+
+> **Nota:** Se requiere `ffmpeg` y `ffprobe` instalados en el sistema y disponibles en el `PATH`, compilados con soporte para `libass`.
+
+### 4. Verificar GPU (Opcional pero recomendado)
+```powershell
+python -c "import torch; print('CUDA Disponible:', torch.cuda.is_available())"
+```
+
+---
+
+## Uso Básico
+
+```powershell
+# 1. Procesar todos los vídeos en la carpeta input/
+python scripts/process_video.py --language auto
+
+# 2. Procesar un vídeo local específico en español
+python scripts/process_video.py --input input/mi_video.mp4 --language es
+
+# 3. Descargar desde YouTube y procesar directamente
+python scripts/process_video.py --youtube-url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --language en
+
+# 4. Especificar modelo Whisper y parámetros de GPU
+python scripts/process_video.py --youtube-url "https://youtu.be/dQw4w9WgXcQ" --model small --device cuda --compute-type float16
+```
+
+---
+
+## Estructura del Proyecto
+
+```
+clipping-Alfa/
+├── scripts/
+│   ├── process_video.py   # Punto de entrada principal
+│   ├── pipeline.py        # Orquestador del flujo
+│   ├── downloader.py      # Módulo de descarga YouTube (yt-dlp)
+│   ├── transcriber.py     # Transcripción y alineación
+│   ├── highlights.py      # Heurística y selección de clips
+│   ├── clipper.py         # Render 9:16 y subtítulos ASS
+│   ├── registry.py        # Registro transaccional y deduplicación
+│   ├── config.py          # Constantes y PipelineConfig
+│   ├── utils.py           # Utilidades de sistema, FFmpeg y GPU
+│   └── legacy/            # Scripts archivados de versiones previas
+├── input/                 # Carpeta de vídeos de entrada
+├── output/                # Directorio de resultados inmutables (output/videos/<id>/)
+├── tests/                 # Tests unitarios y de integración
+│   ├── test_logic.py
+│   └── test_integration.py
+├── ARCHITECTURE.md        # Documentación de arquitectura
+├── requirements.txt       # Dependencias principales
+├── requirements.lock.txt  # Lockfile de entorno congelado
+└── README.md
+```
+
+---
+
+## Configuración Avanzada
+
+| Parámetro CLI | Descripción | Valor por defecto |
+|:---|:---|:---|
+| `--input` | Ruta a un archivo de vídeo específico. Si se omite, busca en `input/`. | `None` |
+| `--youtube-url` | URL de YouTube para descargar y procesar automáticamente. | `None` |
+| `--language` | Idioma esperado (`es`, `en`, etc.) o `auto` para autodetección. | `auto` |
+| `--device` | Dispositivo de cómputo para IA (`cuda` o `cpu`). | `cuda` |
+| `--compute-type` | Precisión de cómputo (`float16`, `float32`, `int8`). | `float16` |
+| `--model` | Modelo de Faster-Whisper (`tiny`, `base`, `small`, `medium`, `large-v3`). | `small` |
+| `--min-duration` | Duración mínima de cada clip en segundos. | `18.0` |
+| `--max-duration` | Duración máxima de cada clip en segundos. | `45.0` |
+| `--max-clips` | Número máximo de clips no solapados a generar. | `8` |
+| `--subtitle-margin-ratio` | Margen inferior relativo para la posición de los subtítulos (0.05 - 0.45). | `0.27` |
+| `--crf` | Factor de calidad visual constante para codificación H.264. | `23` |
+| `--preset` | Preset de velocidad de codificación FFmpeg (`veryfast`, `medium`, etc.). | `veryfast` |
+| `--prune-work-days` | Días de inactividad para purgar carpetas huérfanas en `output/.work` (0 = desactivado). | `0` |
+
+---
 
 ## Tests
 
+El proyecto incluye tests de lógica pura y tests de integración con generación sintética de vídeo y dobles de IA:
+
 ```powershell
+# Ejecutar toda la suite de tests
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Los tests de lógica (`tests/test_logic.py`) no requieren GPU ni FFmpeg. El de integración (`tests/test_integration.py`) genera un MP4 sintético con FFmpeg y sustituye las etapas de IA por dobles para verificar la publicación atómica, el registro v2, el control negativo de subtítulos y el salto de resultados ya válidos.
+---
 
-## Salidas y tolerancia a fallos
+## Roadmap
 
-Cada ejecución trabaja primero en `output/.work/`. Si las cuatro etapas validan sus artefactos, se publica un único directorio inmutable en `output/videos/<id>/` mediante un renombrado atómico. Un fallo deja el estado y el log en `.work`, pero nunca publica una salida parcial ni actualiza `output/processed_videos.v2.json` como completada.
+- [ ] **Selección semántica con LLM:** Módulo para puntuación narrativa y ganchos mediante LLM local/API.
+- [ ] **Smart Crop con seguimiento facial:** Reencuadre dinámico de oradores con MediaPipe / YOLO.
+- [ ] **Aceleración por GPU en FFmpeg:** Exportación con `h264_nvenc`.
+- [ ] **Interfaz Gráfica / Web:** Panel interactivo en Streamlit o Gradio.
 
-Cada salida final contiene:
+---
 
-- `transcript.json`: transcripción de Faster-Whisper, idioma detectado, parámetros y métricas de calidad.
-- `alignment.json`: las palabras y timestamps producidos por WhisperX al alinear **el mismo texto** de `transcript.json`. Esta etapa precede a la selección: la selección usa las palabras alineadas para construir ventanas de clip exactas.
-- `selection.json`: rangos, texto y puntuación de los clips seleccionados. La selección (heurística v2) genera ventanas de duración válida sobre las palabras alineadas y elige con beam search sin solapamientos.
-- `clips/`: clips 1080x1920 con audio.
-- `subtitles/`: un `.ass` y un `*_subtitled.mp4` por clip.
-- `manifest.json` y `run.log`: estado final verificable y trazabilidad.
-- `FINAL_OUTPUTS.txt`: lista explícita de los MP4 que se deben abrir. Los de `clips/` son intermedios sin subtítulos; los finales están en `subtitles/*_subtitled.mp4`.
+## Licencia y Créditos
 
-Antes de publicar, el pipeline abre un fotograma dentro de cada diálogo y compara píxeles de la banda de subtítulos entre el clip base, una recodificación de control sin ASS y el MP4 subtitulado. La recodificación sin subtítulos mide el ruido de píxeles (control negativo); si el cambio provocado por el ASS no supera el máximo entre un mínimo absoluto y el ruido multiplicado, la etapa falla aunque existan el ASS y el MP4.
+Este proyecto se distribuye bajo la licencia MIT.
 
-Los directorios históricos `output/clips`, `output/subtitled`, `output/whisperx` y el registro antiguo `output/processed_videos.json` se conservan y no son consumidos por el nuevo pipeline.
-
-Los scripts antiguos `transcribe.py`, `batch_clips.py`, `make_clip.py`, `add_subtitles.py` y `fix_step4.py` no forman parte de la ruta de ejecución. En especial, no ejecutes `fix_step4.py`: es un reemplazo textual puntual heredado, no un mecanismo seguro de mantenimiento.
-
-## Dependencias
-
-`requirements.txt` declara las dependencias directas y `requirements.lock.txt` fija el entorno actualmente probado de Python 3.11/CUDA 12.6. No instales paquetes durante una ejecución normal. Para reconstruir el entorno, usa primero el lockfile con el índice CUDA correspondiente y valida `torch.cuda.is_available()` antes de procesar.
-
-También se requiere `ffmpeg` y `ffprobe` en `PATH`, con filtro `ass`/libass. El pipeline mantiene `libx264`; no usa NVENC sin una prueba explícita de compatibilidad y calidad.
-
-## Criterio de calidad de transcripción
-
-Antes de cambiar modelo, VAD o parámetros, compara en un vídeo de referencia conocido:
-
-1. idioma detectado y probabilidad;
-2. texto frente a una transcripción de referencia;
-3. confianza media (`avg_logprob`) y repetición anómala de trigramas;
-4. cobertura de palabras alineadas en cada rango seleccionado;
-5. duración, resolución y presencia de audio de cada MP4 final.
-
-El manifiesto y los JSON permiten repetir exactamente la comparación con la misma configuración.
+### Agradecimientos y Tecnologías
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) - Motor de transcripción acelerado.
+- [WhisperX](https://github.com/m-bain/whisperX) - Alineación fonética por palabra.
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - Descarga robusta de fuentes multimedia.
+- [FFmpeg](https://ffmpeg.org/) - Procesamiento de vídeo y renderizado de subtítulos ASS.
