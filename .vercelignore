@@ -1,0 +1,14 @@
+.venv
+.venv/**
+__pycache__
+*.pyc
+input
+output
+tests
+scripts
+run_app.py
+api
+requirements.txt
+requirements.lock.txt
+ui/node_modules
+node_modules
