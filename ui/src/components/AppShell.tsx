@@ -14,14 +14,12 @@ import { ProjectsModal } from './modals/ProjectsModal';
 import { usePipelineStore } from '../store/usePipelineStore';
 
 export const AppShell: React.FC = () => {
-  const { fetchInitialState, updateStateFromWs, addLog } = usePipelineStore();
+  const { fetchInitialState, updateStateFromWs, addLog, getWsUrl, apiBaseUrl, apiToken } = usePipelineStore();
 
   useEffect(() => {
     fetchInitialState();
 
-    // Setup WebSocket connection to backend
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/pipeline`;
+    const wsUrl = getWsUrl();
     let ws: WebSocket | null = null;
 
     try {
@@ -41,7 +39,7 @@ export const AppShell: React.FC = () => {
       };
 
       ws.onerror = () => {
-        // Backend WebSocket not active yet, using local store
+        // Backend WebSocket not active yet, fallback to local demo store
       };
     } catch {
       // Ignored
@@ -50,7 +48,7 @@ export const AppShell: React.FC = () => {
     return () => {
       if (ws) ws.close();
     };
-  }, [fetchInitialState, updateStateFromWs, addLog]);
+  }, [fetchInitialState, updateStateFromWs, addLog, getWsUrl, apiBaseUrl, apiToken]);
 
   return (
     <div className="w-full max-w-[1600px] min-h-[92vh] max-h-[98vh] bg-[#3B3D40] p-2.5 sm:p-4 rounded-[40px] sm:rounded-[48px] shadow-2xl flex flex-col justify-between border border-[#4F5155]/60 overflow-hidden">

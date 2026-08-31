@@ -3,7 +3,7 @@ import { X, Folder, Network, Film, FileText, Settings } from 'lucide-react';
 import { usePipelineStore } from '../store/usePipelineStore';
 
 export const Header: React.FC = () => {
-  const { activeNavTab, setActiveNavTab } = usePipelineStore();
+  const { activeNavTab, setActiveNavTab, isConnected, backendHealth, toggleSettingsModal } = usePipelineStore();
 
   const navItems = [
     { id: 'projects', label: 'Projects', icon: Folder },
@@ -15,7 +15,7 @@ export const Header: React.FC = () => {
 
   return (
     <header className="w-full flex items-center justify-between py-2 sm:py-3 px-2 sm:px-4">
-      {/* Left: Close/Escape Circle Button + Brand Logo + Local Pipeline Badge */}
+      {/* Left: Close/Escape Circle Button + Brand Logo + Local Pipeline / Remote GPU Badge */}
       <div className="flex items-center gap-4 sm:gap-6">
         <button
           onClick={() => window.location.reload()}
@@ -29,12 +29,28 @@ export const Header: React.FC = () => {
           <h1 className="text-[28px] sm:text-[32px] font-semibold text-[#1A1A18] tracking-tight">
             Clipping Alfa
           </h1>
-          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-[#E4E4DC] rounded-full">
-            <span className="w-2 h-2 rounded-full bg-[#D4F63A] animate-pulse" />
-            <span className="text-[11px] font-medium tracking-wider text-[#6B6B66] uppercase">
-              Local Pipeline
+          <button
+            onClick={() => toggleSettingsModal(true)}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-full transition-all duration-200 cursor-pointer hover:shadow-xs ${
+              isConnected
+                ? 'bg-[#E5F5A4] text-[#1A1A18] border border-[#C2E426]'
+                : 'bg-[#E4E4DC] text-[#6B6B66] hover:bg-[#DCDCD4]'
+            }`}
+            title="Configurar conexión con Backend GPU Local"
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${
+                isConnected ? 'bg-[#7EAF00] animate-pulse' : 'bg-[#BCBCB4]'
+              }`}
+            />
+            <span className="text-[11px] font-semibold tracking-wider uppercase">
+              {isConnected
+                ? backendHealth?.gpu_name
+                  ? `GPU: ${backendHealth.gpu_name.replace('NVIDIA GeForce ', '')}`
+                  : 'GPU Backend Connected'
+                : 'Demo Mode (Offline)'}
             </span>
-          </div>
+          </button>
         </div>
       </div>
 

@@ -9,3 +9,7 @@ dist/
 ui/dist/
 
 .vercel
+.env
+.env.local
+.env.*.local
+*.log

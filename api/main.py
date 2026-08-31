@@ -1,4 +1,4 @@
-"""FastAPI backend para Clipping Alfa con soporte de WebSocket y endpoints REST."""
+"""FastAPI backend para Clipping Alfa con soporte de WebSocket, autenticación por token y endpoints REST."""
 
 from __future__ import annotations
 
@@ -10,14 +10,22 @@ import sys
 from pathlib import Path
 from typing import Any, List
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Security, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-# Add scripts directory to path to allow direct imports of pipeline modules
+# Cargar variables de entorno desde .env si existe
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+try:
+    import dotenv
+    dotenv.load_dotenv(PROJECT_ROOT / ".env")
+except ImportError:
+    pass
+
+# Add scripts directory to path to allow direct imports of pipeline modules
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -28,18 +36,71 @@ import pipeline
 import registry
 import utils
 
-app = FastAPI(title="Clipping Alfa API", version="1.0.0")
+app = FastAPI(
+    title="Clipping Alfa API",
+    version="1.0.0",
+    description="Backend de inferencia GPU y orquestación para Clipping Alfa",
+)
 
-# Enable CORS for local Vite dev server
+# -----------------------------------------------------------------------------
+# Configuración CORS estricta y segura
+# -----------------------------------------------------------------------------
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "").strip()
+default_origins = [
+    "https://clipping-alfa.vercel.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+if allowed_origins_env:
+    for origin in allowed_origins_env.split(","):
+        o = origin.strip()
+        if o and o not in default_origins:
+            default_origins.append(o)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=default_origins,
+    allow_origin_regex=r"https://clipping-alfa.*\.vercel\.app",
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Active WebSocket connections manager
+# -----------------------------------------------------------------------------
+# Sistema de Autenticación mediante Token Bearer
+# -----------------------------------------------------------------------------
+security_bearer = HTTPBearer(auto_error=False)
+
+
+def verify_api_token(
+    auth: HTTPAuthorizationCredentials | None = Security(security_bearer),
+    x_api_token: str | None = Header(None, alias="X-API-Token"),
+) -> bool:
+    """Verifica que la petición contenga el token de autorización configurado."""
+    expected_token = os.getenv("CLIPPING_API_TOKEN", "").strip()
+    if not expected_token:
+        # Modo desarrollo sin token configurado en .env
+        return True
+
+    provided_token = ""
+    if auth and auth.credentials:
+        provided_token = auth.credentials.strip()
+    elif x_api_token:
+        provided_token = x_api_token.strip()
+
+    if not provided_token or provided_token != expected_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Token de autorización inválido o ausente. Incluye 'Authorization: Bearer <token>' en el header.",
+        )
+    return True
+
+
+# -----------------------------------------------------------------------------
+# WebSocket Manager
+# -----------------------------------------------------------------------------
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -62,6 +123,9 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+# -----------------------------------------------------------------------------
+# Esquemas Pydantic
+# -----------------------------------------------------------------------------
 class ProcessRequest(BaseModel):
     youtubeUrl: str | None = None
     videoPath: str | None = None
@@ -75,11 +139,38 @@ class ProcessRequest(BaseModel):
     subtitleMarginRatio: float = 0.27
 
 
+# -----------------------------------------------------------------------------
+# Endpoint Público de HealthCheck (Sin autenticación requerida)
+# -----------------------------------------------------------------------------
+@app.get("/health")
+async def health_check():
+    """Healthcheck público para verificar estado del servidor y GPU."""
+    gpu_available = False
+    gpu_name = None
+    try:
+        import torch
+        gpu_available = torch.cuda.is_available()
+        if gpu_available:
+            gpu_name = torch.cuda.get_device_name(0)
+    except Exception:
+        pass
+
+    auth_configured = bool(os.getenv("CLIPPING_API_TOKEN", "").strip())
+
+    return {
+        "status": "ok",
+        "service": "clipping-alfa-backend",
+        "gpu_available": gpu_available,
+        "gpu_name": gpu_name,
+        "auth_enabled": auth_configured,
+        "version": "1.0.0",
+    }
+
+
 def get_latest_project_state() -> dict[str, Any]:
     """Lee el estado del proyecto a partir de los vídeos procesados más recientes."""
     videos_dir = config.FINAL_ROOT
     if not videos_dir.is_dir() or not any(videos_dir.iterdir()):
-        # Return standard rich default state
         return {
             "source": {
                 "id": "source-future-of-ai",
@@ -219,7 +310,6 @@ def get_latest_project_state() -> dict[str, Any]:
             ],
         }
 
-    # Find the most recently modified output directory
     recent_dirs = sorted(
         [d for d in videos_dir.iterdir() if d.is_dir() and (d / "manifest.json").is_file()],
         key=lambda d: d.stat().st_mtime,
@@ -234,7 +324,6 @@ def get_latest_project_state() -> dict[str, Any]:
     transcript = utils.read_json(latest_dir / "transcript.json", {})
     selection = utils.read_json(latest_dir / "selection.json", {})
 
-    # Transform selection into ClipItem list
     clips = []
     types = ["HOOK", "TOPIC", "QUOTE", "STORY", "INSIGHT"]
     for idx, c in enumerate(selection.get("clips", [])):
@@ -320,15 +409,18 @@ def get_latest_project_state() -> dict[str, Any]:
     }
 
 
-@app.get("/api/status")
+# -----------------------------------------------------------------------------
+# Endpoints REST Protegidos con Autenticación
+# -----------------------------------------------------------------------------
+@app.get("/api/status", dependencies=[Depends(verify_api_token)])
 async def get_status():
     """Devuelve el estado consolidado de la sesión de clipping."""
     return get_latest_project_state()
 
 
-@app.post("/api/process")
+@app.post("/api/process", dependencies=[Depends(verify_api_token)])
 async def process_video(req: ProcessRequest):
-    """Inicia el pipeline de procesamiento de vídeo en segundo plano."""
+    """Inicia el pipeline de procesamiento de vídeo en segundo plano con GPU local."""
     async def run_pipeline_task():
         try:
             # 1. Download
@@ -374,7 +466,6 @@ async def process_video(req: ProcessRequest):
 
             runner = pipeline.PipelineRunner(pipeline_config, "info")
             
-            # Execute in executor thread to prevent blocking event loop
             loop = asyncio.get_event_loop()
             final_dir = await loop.run_in_executor(None, runner.run_video, target_video)
 
@@ -417,7 +508,7 @@ async def process_video(req: ProcessRequest):
     return {"status": "started", "message": "Pipeline iniciado en segundo plano"}
 
 
-@app.get("/api/videos")
+@app.get("/api/videos", dependencies=[Depends(verify_api_token)])
 async def list_videos():
     """Lista todos los vídeos de entrada y resultados generados."""
     inputs = [f.name for f in config.INPUT_DIR.glob("*") if f.is_file()]
@@ -425,9 +516,21 @@ async def list_videos():
     return {"input_videos": inputs, "output_projects": outputs}
 
 
+# -----------------------------------------------------------------------------
+# WebSocket Autenticado para Eventos en Tiempo Real
+# -----------------------------------------------------------------------------
 @app.websocket("/ws/pipeline")
-async def websocket_endpoint(websocket: WebSocket):
-    """Canal de comunicación en tiempo real para eventos de telemetría y logs."""
+async def websocket_endpoint(
+    websocket: WebSocket,
+    token: str | None = Query(None),
+):
+    """Canal de comunicación en tiempo real autenticado para telemetría y logs."""
+    expected_token = os.getenv("CLIPPING_API_TOKEN", "").strip()
+    if expected_token:
+        if not token or token.strip() != expected_token:
+            await websocket.close(code=1008, reason="Unauthorized: invalid or missing API token")
+            return
+
     await manager.connect(websocket)
     try:
         while True:
