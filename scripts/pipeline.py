@@ -48,9 +48,15 @@ from utils import (
 class PipelineRunner:
     """Coordina las etapas de IA, corte, subtitulado, validación y publicación atómica."""
 
-    def __init__(self, config: PipelineConfig, verbosity: str):
+    def __init__(
+        self,
+        config: PipelineConfig,
+        verbosity: str,
+        stage_callback: Callable[[str, str, dict[str, Any] | None], None] | None = None,
+    ):
         self.config = config
         self.verbosity = verbosity
+        self.stage_callback = stage_callback
         self.ffmpeg = require_command("ffmpeg")
         self.ffprobe = require_command("ffprobe")
         self.registry = RegistryManager()
@@ -58,6 +64,14 @@ class PipelineRunner:
         WORK_ROOT.mkdir(parents=True, exist_ok=True)
         FINAL_ROOT.mkdir(parents=True, exist_ok=True)
         self._validate_ass_support()
+
+    def _report_stage(self, stage: str, status: str, details: dict[str, Any] | None = None) -> None:
+        """Emite una notificación de progreso si hay un callback registrado."""
+        if self.stage_callback:
+            try:
+                self.stage_callback(stage, status, details or {})
+            except Exception:
+                pass
 
     def _validate_ass_support(self) -> None:
         """Verifica que el binario de FFmpeg contenga soporte para el filtro ass/libass."""
@@ -95,10 +109,12 @@ class PipelineRunner:
 
         try:
             source_probe = ffprobe_json(video, self.ffprobe, logger)
-            if float(source_probe.get("format", {}).get("duration", 0)) <= 0:
+            source_duration = float(source_probe.get("format", {}).get("duration", 0))
+            if source_duration <= 0:
                 raise StageValidationError(f"Duración de entrada inválida: {video}")
 
             # Etapa 1: Transcripción
+            self._report_stage("transcribe", "processing", {"title": "Transcribiendo audio con Faster-Whisper (CUDA FP16)..."})
             state.stage_started("transcription")
             transcript = transcribe_video(video, artifacts / "transcript.json", self.config, logger)
             state.stage_completed("transcription", transcript["quality"] | {
@@ -106,21 +122,36 @@ class PipelineRunner:
                 "language_probability": transcript["language_probability"],
             })
             self._maybe_fail("transcription")
+            self._report_stage("transcribe", "completed", {
+                "title": "Transcripción completada",
+                "word_count": transcript["quality"]["word_count"],
+                "language": transcript["detected_language"],
+            })
 
             # Etapa 2: Alineación fonética
+            self._report_stage("align", "processing", {"title": "Alineando timestamps a nivel de palabra con WhisperX..."})
             state.stage_started("alignment")
             alignment = align_transcript(video, transcript, artifacts / "alignment.json", self.config, logger)
             state.stage_completed("alignment", {"word_count": len(alignment["word_segments"]), "language": alignment["language"]})
             self._maybe_fail("alignment")
+            self._report_stage("align", "completed", {
+                "title": "Alineación WhisperX completada",
+                "word_count": len(alignment["word_segments"]),
+            })
 
             # Etapa 3: Selección y corte
+            self._report_stage("select", "processing", {"title": "Seleccionando clips de alto impacto mediante búsqueda en haz..."})
             state.stage_started("selection")
             selection = select_clips(alignment, artifacts / "selection.json", self.config)
+            self._report_stage("render", "processing", {"title": f"Renderizando {len(selection.get('clips', []))} clips verticales 9:16 (1080x1920)..."})
             clips = render_clips(video, selection, artifacts / "clips", self.config, self.ffmpeg, self.ffprobe, logger)
             state.stage_completed("selection", {"clip_count": len(clips), "clips": clips})
             self._maybe_fail("selection")
+            self._report_stage("select", "completed", {"title": f"{len(clips)} clips seleccionados"})
+            self._report_stage("render", "completed", {"title": f"{len(clips)} clips renderizados en 9:16"})
 
             # Etapa 4: Subtítulos dinámicos con validación visual negativa
+            self._report_stage("validate", "processing", {"title": "Incrustando subtítulos dinámicos ASS y validando contraste visual..."})
             state.stage_started("subtitles")
             subtitled = render_subtitles(
                 selection, alignment, artifacts / "clips", artifacts / "subtitles",
@@ -128,6 +159,7 @@ class PipelineRunner:
             )
             state.stage_completed("subtitles", {"clip_count": len(subtitled), "clips": subtitled})
             self._maybe_fail("subtitles")
+            self._report_stage("validate", "completed", {"title": "Subtítulos dinámicos verificados (PASS)"})
 
             (artifacts / "FINAL_OUTPUTS.txt").write_text(
                 "ABRE ESTOS ARCHIVOS (no los MP4 de clips/, que son intermedios sin subtítulos):\n"
@@ -154,6 +186,10 @@ class PipelineRunner:
             os.replace(artifacts, final_dir)
             self.registry.record_completed(video, signature, final_dir, self.config)
             print(f"Completado: {video.name}\nSalida final: {final_dir}")
+            self._report_stage("output", "completed", {
+                "title": f"Pipeline completado: {final_dir.name}",
+                "final_dir": str(final_dir),
+            })
             return final_dir
         except BaseException as error:
             state.failed(error)

@@ -36,30 +36,21 @@ export interface PipelineMetrics {
 
 export interface ClipItem {
   id: string;
-  type: 'HOOK' | 'TOPIC' | 'QUOTE' | 'STORY' | 'INSIGHT';
+  type: string;
   title?: string;
-  start: number; // seconds
-  end: number;   // seconds
+  start: number;
+  end: number;
   startFormatted: string;
   endFormatted: string;
   score: number;
+  scoreLabel?: string;
   thumbnail: string;
   quote: string;
   aspectRatio: '9:16' | '16:9';
   hasSubtitles: boolean;
   validated: boolean;
   videoUrl?: string;
-  assUrl?: string;
-}
-
-export interface TimelineSegment {
-  id: string;
-  name: string;
-  start: number;
-  end: number;
-  startFormatted: string;
-  endFormatted: string;
-  type: 'intro' | 'outro' | 'content';
+  downloadUrl?: string;
 }
 
 export interface LogEntry {
@@ -81,32 +72,30 @@ export interface TranscriptWord {
 export interface TranscriptSegment {
   start: number;
   end: number;
+  timeFormatted?: string;
   text: string;
   avg_logprob?: number;
   words?: TranscriptWord[];
 }
 
+export interface ProjectSummary {
+  id: string;
+  title: string;
+  date: string;
+  clipsCount: number;
+  status: string;
+}
+
 export interface FullProjectState {
-  source: SourceMetadata;
-  pipeline: PipelineStages;
+  empty: boolean;
+  source: SourceMetadata | null;
+  pipeline: PipelineStages | null;
   metrics: PipelineMetrics;
   clips: ClipItem[];
-  intro: TimelineSegment;
-  outro: TimelineSegment;
   logs: LogEntry[];
-  transcription?: {
+  transcript?: {
     language: string;
     probability: number;
     segments: TranscriptSegment[];
-  };
-  config: {
-    language: string;
-    model: string;
-    device: string;
-    computeType: string;
-    minDuration: number;
-    maxDuration: number;
-    maxClips: number;
-    subtitleMarginRatio: number;
   };
 }

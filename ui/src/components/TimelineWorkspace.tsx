@@ -1,33 +1,38 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { ChevronUp, ChevronDown, Plus, Play, Video } from 'lucide-react';
+import { Play, Download, Film, CheckCircle2 } from 'lucide-react';
 import { usePipelineStore } from '../store/usePipelineStore';
 
 export const TimelineWorkspace: React.FC = () => {
-  const { state, openVideoPlayer, openNewSourceModal } = usePipelineStore();
-  const { clips, intro, outro } = state;
+  const { state, openVideoPlayer, openNewSourceModal, getDownloadUrl } = usePipelineStore();
+  const { source, clips, empty } = state;
   const containerRef = useRef<HTMLDivElement>(null);
   
-  // Track positions of timeline nodes and cards to render SVG Bézier curves
   const [nodePositions, setNodePositions] = useState<{ [key: string]: { x: number; y: number } }>({});
   const [cardPositions, setCardPositions] = useState<{ [key: string]: { x: number; y: number } }>({});
 
   const nodeRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
   const cardRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
 
-  const timeMarkers = [
-    { label: '00:00', percent: 8 },
-    { label: '15:00', percent: 27 },
-    { label: '30:00', percent: 50 },
-    { label: '45:00', percent: 73 },
-    { label: '60:00', percent: 92 },
-  ];
-
-  // Clip anchor percentages along the timeline matching the visual design
-  const clipTimePercent = {
-    clip_01: 22,
-    clip_02: 47,
-    clip_03: 70,
+  // Dynamic time marker generation based on actual video duration
+  const duration = source?.duration || 60;
+  const generateTimeMarkers = () => {
+    const count = 5;
+    const markers = [];
+    for (let i = 0; i < count; i++) {
+      const fraction = i / (count - 1);
+      const sec = fraction * duration;
+      const mins = Math.floor(sec / 60);
+      const secs = Math.floor(sec % 60);
+      const label = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+      markers.push({
+        label,
+        percent: fraction * 100,
+      });
+    }
+    return markers;
   };
+
+  const timeMarkers = generateTimeMarkers();
 
   const updatePositions = () => {
     if (!containerRef.current) return;
@@ -50,7 +55,7 @@ export const TimelineWorkspace: React.FC = () => {
       if (el) {
         const rect = el.getBoundingClientRect();
         newCards[id] = {
-          x: rect.left - containerRect.left + 32, // attach to top left quadrant
+          x: rect.left - containerRect.left + rect.width / 2,
           y: rect.top - containerRect.top,
         };
       }
@@ -81,7 +86,6 @@ export const TimelineWorkspace: React.FC = () => {
     const endY = card.y;
 
     const deltaY = endY - startY;
-    // Cubic bezier path curving down from timeline node to card top
     const controlY1 = startY + deltaY * 0.45;
     const controlY2 = startY + deltaY * 0.55;
 
@@ -96,61 +100,75 @@ export const TimelineWorkspace: React.FC = () => {
           strokeWidth="1.5"
           strokeLinecap="round"
         />
-        {/* Subtle connector terminal dot */}
         <circle cx={endX} cy={endY} r="2.5" fill="#1A1A18" opacity="0.4" />
       </g>
     );
   };
 
+  // Empty state placeholder
+  if (empty || !source || clips.length === 0) {
+    return (
+      <div className="w-full flex-1 bg-[#EBEBE5] border border-[#D5D5CF]/80 rounded-[32px] sm:rounded-[36px] p-8 flex flex-col items-center justify-center text-center min-h-[420px] shadow-inner">
+        <div className="w-16 h-16 rounded-[22px] bg-white text-[#1A1A18] flex items-center justify-center shadow-xs mb-3">
+          <Film className="w-8 h-8 text-[#6B6B66]" />
+        </div>
+        <h3 className="text-[18px] font-bold text-[#1A1A18] mb-1">
+          No hay clips seleccionados aún
+        </h3>
+        <p className="text-[13px] text-[#6B6B66] max-w-md mb-5">
+          Procesa un vídeo para que la IA extraiga los mejores momentos, genere los timestamps y renderice los clips verticales con subtítulos dinámicos.
+        </p>
+        <button
+          onClick={openNewSourceModal}
+          className="h-11 px-6 rounded-full bg-[#D4F63A] hover:bg-[#C2E426] text-[#1A1A18] font-bold text-[13px] shadow-sm transition-all cursor-pointer"
+        >
+          + Añadir primer vídeo
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={containerRef}
-      className="relative w-full flex-1 bg-[#EBEBE5] border border-[#D5D5CF]/80 rounded-[32px] sm:rounded-[36px] p-6 sm:p-8 flex flex-col justify-between overflow-hidden shadow-inner min-h-[460px]"
+      className="relative w-full flex-1 bg-[#EBEBE5] border border-[#D5D5CF]/80 rounded-[32px] sm:rounded-[36px] p-6 sm:p-7 flex flex-col justify-between overflow-hidden shadow-inner min-h-[440px]"
     >
-      {/* SVG Layer for Dynamic Bézier Curves */}
+      {/* SVG Layer for dynamic Bézier curves */}
       <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
         {clips.map((clip) => renderBezierCurve(`node-${clip.id}`, `card-${clip.id}`))}
       </svg>
 
-      {/* Top Bar: Time Axis & Timeline Line & Floating + Button */}
-      <div className="relative w-full pt-1 pb-6">
-        {/* Time Axis Labels */}
+      {/* Top Bar: Time Axis & Dynamic Nodes */}
+      <div className="relative w-full pt-1 pb-4">
+        {/* Dynamic Time Markers */}
         <div className="relative w-full h-6 mb-2">
-          {timeMarkers.map((marker) => (
+          {timeMarkers.map((marker, i) => (
             <div
-              key={marker.label}
-              className="absolute text-[12px] font-medium text-[#6B6B66] -translate-x-1/2"
-              style={{ left: `${marker.percent}%` }}
+              key={`marker-${i}`}
+              className="absolute text-[11px] font-medium text-[#6B6B66] -translate-x-1/2"
+              style={{ left: `${Math.min(95, Math.max(5, marker.percent))}%` }}
             >
               {marker.label}
             </div>
           ))}
         </div>
 
-        {/* Horizontal Timeline 1px Track Line */}
+        {/* Horizontal Timeline Track Line */}
         <div className="relative w-full h-6 flex items-center">
-          <div className="w-full h-[1.5px] bg-[#D5D5CF] rounded-full" />
+          <div className="w-full h-[2px] bg-[#D5D5CF] rounded-full" />
 
           {/* Time Marker Tick Lines */}
-          {timeMarkers.map((marker) => (
+          {timeMarkers.map((marker, i) => (
             <div
-              key={`tick-${marker.label}`}
+              key={`tick-${i}`}
               className="absolute w-[1.5px] h-3 bg-[#BCBCB4] -top-1 -translate-x-1/2"
-              style={{ left: `${marker.percent}%` }}
+              style={{ left: `${Math.min(95, Math.max(5, marker.percent))}%` }}
             />
           ))}
 
-          {/* Intro Start Node */}
-          <div
-            className="absolute w-4 h-4 rounded-full bg-[#D4F63A] border-2 border-white shadow-sm flex items-center justify-center -translate-x-1/2"
-            style={{ left: '8%' }}
-          >
-            <div className="w-1.5 h-1.5 rounded-full bg-[#1A1A18]" />
-          </div>
-
           {/* Dynamic Nodes for each clip */}
           {clips.map((clip) => {
-            const percent = clipTimePercent[clip.id as keyof typeof clipTimePercent] || 50;
+            const percent = duration > 0 ? Math.min(92, Math.max(8, (clip.start / duration) * 100)) : 50;
             return (
               <div
                 key={`node-${clip.id}`}
@@ -159,175 +177,93 @@ export const TimelineWorkspace: React.FC = () => {
                 style={{ left: `${percent}%` }}
                 onClick={() => openVideoPlayer(clip)}
               >
-                {/* Glowing Outer Halo */}
-                <div className="w-6 h-6 rounded-full bg-[#D4F63A]/50 group-hover:bg-[#D4F63A]/80 flex items-center justify-center transition-all duration-300 shadow-sm">
-                  <div className="w-3.5 h-3.5 rounded-full bg-[#D4F63A] border border-white flex items-center justify-center shadow">
+                <div className="w-6 h-6 rounded-full bg-[#D4F63A]/60 group-hover:bg-[#D4F63A] flex items-center justify-center transition-all duration-300 shadow-xs">
+                  <div className="w-3.5 h-3.5 rounded-full bg-[#D4F63A] border border-white flex items-center justify-center shadow-xs">
                     <div className="w-1.5 h-1.5 rounded-full bg-[#1A1A18]" />
                   </div>
                 </div>
               </div>
             );
           })}
+        </div>
+      </div>
 
-          {/* Outro End Node */}
+      {/* Center Section: Real Clip Cards */}
+      <div className="relative w-full flex flex-wrap justify-center gap-4 sm:gap-6 px-1 z-20 my-auto py-2">
+        {clips.map((clip) => (
           <div
-            className="absolute w-4 h-4 rounded-full bg-[#D4F63A] border-2 border-white shadow-sm flex items-center justify-center -translate-x-1/2"
-            style={{ left: '92%' }}
+            key={clip.id}
+            ref={(el) => (cardRefs.current[`card-${clip.id}`] = el)}
+            className="w-full sm:w-[260px] md:w-[280px] bg-[#F8F8F4] border border-[#D5D5CF] rounded-[24px] p-4 shadow-xs hover:shadow-md transition-all duration-200 flex flex-col justify-between"
           >
-            <div className="w-1.5 h-1.5 rounded-full bg-[#1A1A18]" />
-          </div>
-        </div>
-
-        {/* Floating Circle + Action Button in Top Right */}
-        <button
-          onClick={openNewSourceModal}
-          className="absolute right-0 top-0 w-13 h-13 sm:w-14 sm:h-14 rounded-full bg-[#1A1A18] text-white flex items-center justify-center shadow-lg hover:bg-black hover:scale-105 active:scale-95 transition-all duration-200 z-30"
-          title="Add New Video Source"
-        >
-          <Plus className="w-6 h-6 stroke-[2.5]" />
-        </button>
-      </div>
-
-      {/* Main Content Area: Left Controls/Intro + Center Clip Cards + Right Outro */}
-      <div className="relative w-full grid grid-cols-1 md:grid-cols-12 gap-4 items-center z-20 my-auto py-2">
-        {/* Left Section: Chevron Controls & Intro Capsule */}
-        <div className="col-span-12 md:col-span-2 flex items-center gap-3">
-          {/* Vertical Navigation Pill with Up/Down Chevrons */}
-          <div className="flex flex-col items-center bg-[#F8F8F4] border border-[#D5D5CF] rounded-full p-1 shadow-sm">
-            <button className="w-7 h-7 rounded-full flex items-center justify-center text-[#6B6B66] hover:text-[#1A1A18] hover:bg-white transition-colors">
-              <ChevronUp className="w-4 h-4" />
-            </button>
-            <button className="w-7 h-7 rounded-full flex items-center justify-center text-[#6B6B66] hover:text-[#1A1A18] hover:bg-white transition-colors">
-              <ChevronDown className="w-4 h-4" />
-            </button>
-          </div>
-
-          {/* Intro Segment Capsule */}
-          <div className="flex-1 bg-[#F8F8F4] border border-[#D5D5CF] rounded-[24px] px-4 py-3 shadow-sm hover:shadow-md transition-all duration-200">
-            <div className="flex items-center gap-1.5 mb-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#6B6B66]" />
-              <span className="text-[13px] font-semibold text-[#1A1A18]">{intro.name}</span>
-            </div>
-            <div className="text-[11px] font-medium text-[#6B6B66]">
-              {intro.startFormatted} — {intro.endFormatted}
-            </div>
-          </div>
-        </div>
-
-        {/* Center Section: Clip Cards (HOOK, TOPIC, QUOTE) */}
-        <div className="col-span-12 md:col-span-8 flex flex-wrap lg:flex-nowrap justify-center gap-4 sm:gap-6 px-1">
-          {clips.map((clip) => (
-            <div
-              key={clip.id}
-              ref={(el) => (cardRefs.current[`card-${clip.id}`] = el)}
-              className="w-full sm:w-[240px] md:w-[250px] lg:w-[260px] bg-[#F8F8F4] border border-[#D5D5CF] rounded-[26px] p-4 shadow-sm hover:shadow-lg hover:-translate-y-1 transition-all duration-300 flex flex-col justify-between group cursor-pointer"
-              onClick={() => openVideoPlayer(clip)}
-            >
-              {/* Card Header: Type Badge, Score Pill, Timestamp */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="px-2.5 py-0.5 rounded-full bg-[#E5F5A4] text-[#1A1A18] text-[10px] font-bold tracking-wider uppercase">
-                    {clip.type}
-                  </span>
-                  <span className="px-2 py-0.5 rounded-full bg-white border border-[#D5D5CF]/60 text-[#6B6B66] text-[11px] font-medium">
-                    Score {clip.score}
-                  </span>
-                </div>
-
-                <div className="text-[14px] font-semibold text-[#1A1A18] mb-2.5">
-                  {clip.startFormatted}
-                </div>
-
-                {/* Media Row: Thumbnail & Quote Text */}
-                <div className="flex gap-2.5 items-start mb-3">
-                  {/* Thumbnail with Play Icon */}
-                  <div className="relative w-20 h-16 rounded-[14px] overflow-hidden flex-shrink-0 bg-black group-hover:shadow-md transition-shadow">
-                    <img
-                      src={clip.thumbnail}
-                      alt={clip.type}
-                      className="w-full h-full object-cover opacity-90 group-hover:scale-105 transition-transform duration-300"
-                    />
-                    <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
-                      <div className="w-6 h-6 rounded-full bg-white/90 text-[#1A1A18] flex items-center justify-center pl-0.5 shadow-sm">
-                        <Play className="w-2.5 h-2.5 fill-current text-[#1A1A18]" />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Quote Excerpt */}
-                  <p className="text-[11px] leading-[1.35] text-[#4A4A45] font-normal italic line-clamp-3">
-                    "{clip.quote}"
-                  </p>
-                </div>
+            <div>
+              {/* Header: Type Badge, Confidence Pill */}
+              <div className="flex items-center justify-between mb-2">
+                <span className="px-2.5 py-0.5 rounded-full bg-[#E5F5A4] text-[#1A1A18] text-[10px] font-bold tracking-wider uppercase">
+                  {clip.type}
+                </span>
+                <span className="px-2 py-0.5 rounded-full bg-white border border-[#D5D5CF]/60 text-[#6B6B66] text-[10px] font-semibold">
+                  Confianza: {clip.scoreLabel || 'Alta'}
+                </span>
               </div>
 
-              {/* Card Footer: Validation Dots (9:16, Subtitles, Validated) & + Button */}
-              <div className="flex items-center justify-between pt-2.5 border-t border-[#D5D5CF]/50">
-                <div className="flex items-center gap-2 text-[10px] font-medium text-[#6B6B66]">
-                  <span className="inline-flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#D4F63A]" />
-                    9:16
-                  </span>
-                  <span>·</span>
-                  <span className="inline-flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#D4F63A]" />
-                    Subtitles
-                  </span>
-                  <span>·</span>
-                  <span className="inline-flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#D4F63A]" />
-                    Validated
-                  </span>
-                </div>
+              {/* Time Range */}
+              <div className="text-[13px] font-bold text-[#1A1A18] mb-2">
+                {clip.startFormatted} — {clip.endFormatted}
+              </div>
 
+              {/* Quote Excerpt */}
+              <p className="text-[12px] leading-relaxed text-[#3A3A36] italic line-clamp-3 mb-3 bg-white/50 p-2 rounded-[14px] border border-[#D5D5CF]/40">
+                "{clip.quote || 'Highlight extraído automáticamente...'}"
+              </p>
+            </div>
+
+            {/* Footer: Publication Check & Action Buttons */}
+            <div className="pt-2.5 border-t border-[#D5D5CF]/60 space-y-2">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[#84A90A]">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Listo para publicar (9:16 + Subtítulos)</span>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openVideoPlayer(clip);
-                  }}
-                  className="w-6 h-6 rounded-full bg-white border border-[#D5D5CF] flex items-center justify-center text-[#6B6B66] hover:text-[#1A1A18] hover:border-[#1A1A18] transition-colors"
-                  title="Expand Clip"
+                  onClick={() => openVideoPlayer(clip)}
+                  className="flex-1 h-8 rounded-full bg-[#1A1A18] hover:bg-black text-white text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                 >
-                  <Plus className="w-3.5 h-3.5" />
+                  <Play className="w-3 h-3 fill-current" />
+                  <span>Reproducir</span>
                 </button>
+
+                <a
+                  href={getDownloadUrl(clip)}
+                  download
+                  className="h-8 px-3 rounded-full bg-white hover:bg-[#EAEAE4] border border-[#D5D5CF] text-[#1A1A18] text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors"
+                  title="Descargar vídeo vertical con subtítulos"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>MP4</span>
+                </a>
               </div>
             </div>
-          ))}
-        </div>
-
-        {/* Right Section: Outro Segment Capsule */}
-        <div className="col-span-12 md:col-span-2 flex justify-end">
-          <div className="w-full bg-[#F8F8F4] border border-[#D5D5CF] rounded-[24px] px-4 py-3 shadow-sm hover:shadow-md transition-all duration-200">
-            <div className="flex items-center gap-1.5 mb-1">
-              <Video className="w-3.5 h-3.5 text-[#6B6B66]" />
-              <span className="text-[13px] font-semibold text-[#1A1A18]">{outro.name}</span>
-            </div>
-            <div className="text-[11px] font-medium text-[#6B6B66]">
-              {outro.startFormatted} — {outro.endFormatted}
-            </div>
           </div>
-        </div>
+        ))}
       </div>
 
-      {/* Bottom Waveform / Visual Audio Bar */}
-      <div className="w-full pt-4 flex items-center justify-center">
-        <div className="w-full max-w-4xl h-5 rounded-full bg-gradient-to-r from-transparent via-[#C6E2F7]/50 to-transparent flex items-center px-4 overflow-hidden relative">
-          <div className="w-full flex items-center justify-between gap-1 opacity-75">
-            {Array.from({ length: 60 }).map((_, i) => (
+      {/* Bottom Audio/Speech Waves Bar */}
+      <div className="w-full pt-2 flex items-center justify-center">
+        <div className="w-full max-w-2xl h-4 rounded-full bg-[#DCDCD6] flex items-center px-3 overflow-hidden opacity-80">
+          <div className="w-full flex items-center justify-between gap-1">
+            {Array.from({ length: 48 }).map((_, i) => (
               <div
                 key={i}
-                className="w-1 rounded-full transition-all duration-300"
+                className="w-1 rounded-full transition-all"
                 style={{
-                  height: `${Math.max(4, Math.sin(i * 0.25) * 12 + 6)}px`,
-                  backgroundColor: i >= 12 && i <= 48 ? (i % 6 === 0 ? '#D4F63A' : '#7CB7E8') : '#D5D5CF',
+                  height: `${Math.max(3, Math.sin(i * 0.3) * 10 + 4)}px`,
+                  backgroundColor: i % 4 === 0 ? '#D4F63A' : '#A4A49E',
                 }}
               />
             ))}
           </div>
-          {/* Highlighted Yellow Marker Line on Waveform */}
-          <div className="absolute left-[22%] top-0 bottom-0 w-[2px] bg-[#D4F63A]" />
-          <div className="absolute left-[47%] top-0 bottom-0 w-[2px] bg-[#D4F63A]" />
-          <div className="absolute left-[70%] top-0 bottom-0 w-[2px] bg-[#D4F63A]" />
         </div>
       </div>
     </div>

@@ -1,80 +1,124 @@
-import React from 'react';
-import { Check, Loader2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { Check, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { usePipelineStore } from '../store/usePipelineStore';
-import { StageStatus } from '../types/pipeline';
+import { StageStatus, PipelineStages } from '../types/pipeline';
+
+type StageKey = keyof PipelineStages;
 
 export const PipelineStatus: React.FC = () => {
-  const { state } = usePipelineStore();
+  const { state, isProcessing } = usePipelineStore();
   const { pipeline } = state;
+  const [isExpanded, setIsExpanded] = useState(true);
 
-  const stages: { id: keyof typeof pipeline; label: string }[] = [
-    { id: 'download', label: 'Download' },
-    { id: 'transcribe', label: 'Transcribe' },
-    { id: 'align', label: 'Align' },
-    { id: 'select', label: 'Select' },
-    { id: 'render', label: 'Render' },
-    { id: 'validate', label: 'Validate' },
-    { id: 'output', label: 'Output' },
+  const stages: { id: StageKey; label: string }[] = [
+    { id: 'download', label: 'Descarga' },
+    { id: 'transcribe', label: 'Transcripción' },
+    { id: 'align', label: 'Alineación' },
+    { id: 'select', label: 'Selección' },
+    { id: 'render', label: 'Render 9:16' },
+    { id: 'validate', label: 'Subtítulos' },
+    { id: 'output', label: 'Publicación' },
   ];
+
+  if (!pipeline) {
+    return (
+      <div className="w-full pt-2.5 pb-1 border-t border-[#D5D5CF]/50 flex items-center justify-between text-[11px] text-[#6B6B66]">
+        <span>Pipeline inactivo</span>
+        <span className="font-medium">Listo para recibir nuevo vídeo</span>
+      </div>
+    );
+  }
+
+  // Count completed
+  const completedCount = stages.filter((s) => pipeline[s.id] === 'completed').length;
+  const currentStage = stages.find((s) => pipeline[s.id] === 'processing');
 
   const getStatusBadge = (status: StageStatus) => {
     switch (status) {
       case 'completed':
         return (
-          <div className="w-5 h-5 rounded-full bg-[#D4F63A] text-[#1A1A18] flex items-center justify-center shadow-sm">
-            <Check className="w-3 h-3 stroke-[3]" />
+          <div className="w-4 h-4 rounded-full bg-[#D4F63A] text-[#1A1A18] flex items-center justify-center shadow-xs">
+            <Check className="w-2.5 h-2.5 stroke-[3]" />
           </div>
         );
       case 'processing':
         return (
-          <div className="w-5 h-5 rounded-full bg-[#D4F63A] text-[#1A1A18] flex items-center justify-center pulse-glow shadow-md">
-            <Loader2 className="w-3 h-3 animate-spin stroke-[2.5]" />
+          <div className="w-4 h-4 rounded-full bg-[#D4F63A] text-[#1A1A18] flex items-center justify-center pulse-glow shadow-xs">
+            <Loader2 className="w-2.5 h-2.5 animate-spin stroke-[2.5]" />
           </div>
         );
       case 'error':
         return (
-          <div className="w-5 h-5 rounded-full bg-red-400 text-white flex items-center justify-center">
-            <span className="text-[10px] font-bold">!</span>
+          <div className="w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center">
+            <span className="text-[9px] font-bold">!</span>
           </div>
         );
       case 'pending':
       default:
         return (
-          <div className="w-5 h-5 rounded-full bg-[#D5D5CF] border border-[#BCBCB4]" />
+          <div className="w-4 h-4 rounded-full bg-[#D5D5CF] border border-[#BCBCB4]" />
         );
     }
   };
 
   return (
-    <div className="w-full pt-3 pb-1 border-t border-[#D5D5CF]/50 flex items-center justify-between overflow-x-auto no-scrollbar">
-      {stages.map((stage, idx) => {
-        const status = pipeline[stage.id];
-        const isCompleted = status === 'completed';
-        const isProcessing = status === 'processing';
+    <div className="w-full pt-2.5 border-t border-[#D5D5CF]/50">
+      {/* Compact Header Summary */}
+      <div 
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex items-center justify-between cursor-pointer py-1 select-none"
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-[12px] font-bold text-[#1A1A18]">
+            {isProcessing && currentStage
+              ? `Procesando: ${currentStage.label}...`
+              : completedCount === 7
+              ? 'Pipeline Completado (7/7)'
+              : `Estado del Pipeline (${completedCount}/7)`}
+          </span>
+          {isProcessing && (
+            <span className="w-2 h-2 rounded-full bg-[#D4F63A] animate-ping" />
+          )}
+        </div>
 
-        return (
-          <React.Fragment key={stage.id}>
-            <div className="flex items-center gap-2 group cursor-default">
-              {getStatusBadge(status)}
-              <span
-                className={`text-[12px] font-medium transition-colors ${
-                  isCompleted || isProcessing ? 'text-[#1A1A18] font-semibold' : 'text-[#6B6B66]'
-                }`}
-              >
-                {stage.label}
-              </span>
-            </div>
+        <button className="text-[#6B6B66] hover:text-[#1A1A18] transition-colors p-0.5">
+          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        </button>
+      </div>
 
-            {idx < stages.length - 1 && (
-              <div
-                className={`flex-1 mx-2 sm:mx-3 h-[2px] rounded-full transition-all duration-500 ${
-                  isCompleted ? 'bg-[#D4F63A]' : 'bg-[#D5D5CF]'
-                }`}
-              />
-            )}
-          </React.Fragment>
-        );
-      })}
+      {/* Expanded Progress Nodes */}
+      {isExpanded && (
+        <div className="w-full pt-2 pb-1 flex items-center justify-between overflow-x-auto no-scrollbar gap-1">
+          {stages.map((stage, idx) => {
+            const status = pipeline[stage.id] || 'pending';
+            const isCompleted = status === 'completed';
+            const isProc = status === 'processing';
+
+            return (
+              <React.Fragment key={stage.id}>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {getStatusBadge(status)}
+                  <span
+                    className={`text-[11px] transition-colors ${
+                      isCompleted || isProc ? 'text-[#1A1A18] font-bold' : 'text-[#6B6B66]'
+                    }`}
+                  >
+                    {stage.label}
+                  </span>
+                </div>
+
+                {idx < stages.length - 1 && (
+                  <div
+                    className={`flex-1 mx-1 sm:mx-2 h-[1.5px] rounded-full transition-all duration-500 min-w-[12px] ${
+                      isCompleted ? 'bg-[#D4F63A]' : 'bg-[#D5D5CF]'
+                    }`}
+                  />
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

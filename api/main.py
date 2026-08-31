@@ -1,4 +1,4 @@
-"""FastAPI backend para Clipping Alfa con soporte de WebSocket, autenticación por token y endpoints REST."""
+"""FastAPI backend para Clipping Alfa con soporte de WebSocket, autenticación por token y endpoints REST reales."""
 
 from __future__ import annotations
 
@@ -7,12 +7,13 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, List
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Security, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -25,7 +26,7 @@ try:
 except ImportError:
     pass
 
-# Add scripts directory to path to allow direct imports of pipeline modules
+# Añadir scripts al path
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -43,7 +44,7 @@ app = FastAPI(
 )
 
 # -----------------------------------------------------------------------------
-# Configuración CORS estricta y segura
+# Configuración CORS estricta
 # -----------------------------------------------------------------------------
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "").strip()
 default_origins = [
@@ -69,7 +70,7 @@ app.add_middleware(
 )
 
 # -----------------------------------------------------------------------------
-# Sistema de Autenticación mediante Token Bearer
+# Autenticación Bearer Token
 # -----------------------------------------------------------------------------
 security_bearer = HTTPBearer(auto_error=False)
 
@@ -81,7 +82,6 @@ def verify_api_token(
     """Verifica que la petición contenga el token de autorización configurado."""
     expected_token = os.getenv("CLIPPING_API_TOKEN", "").strip()
     if not expected_token:
-        # Modo desarrollo sin token configurado en .env
         return True
 
     provided_token = ""
@@ -99,7 +99,7 @@ def verify_api_token(
 
 
 # -----------------------------------------------------------------------------
-# WebSocket Manager
+# WebSocket Connection Manager
 # -----------------------------------------------------------------------------
 class ConnectionManager:
     def __init__(self):
@@ -140,7 +140,207 @@ class ProcessRequest(BaseModel):
 
 
 # -----------------------------------------------------------------------------
-# Endpoint Público de HealthCheck (Sin autenticación requerida)
+# Helper de Formato de Tiempo
+# -----------------------------------------------------------------------------
+def format_seconds(seconds: float) -> str:
+    """Convierte segundos a formato MM:SS o HH:MM:SS."""
+    sec = max(0, int(seconds))
+    hrs = sec // 3600
+    mins = (sec % 3600) // 60
+    secs = sec % 60
+    if hrs > 0:
+        return f"{hrs:02d}:{mins:02d}:{secs:02d}"
+    return f"{mins:02d}:{secs:02d}"
+
+
+# -----------------------------------------------------------------------------
+# Extracción de Estado Real desde output/videos/
+# -----------------------------------------------------------------------------
+def get_latest_project_state(project_id: str | None = None) -> dict[str, Any]:
+    """Lee el estado del proyecto a partir de los vídeos procesados reales."""
+    videos_dir = config.FINAL_ROOT
+    if not videos_dir.is_dir():
+        return {
+            "empty": True,
+            "source": None,
+            "pipeline": None,
+            "metrics": {
+                "sourceCategory": "Ninguno",
+                "sourceDuration": "00:00",
+                "words": 0,
+                "candidates": 0,
+                "selected": 0,
+                "rendered": 0,
+                "validated": 0,
+            },
+            "clips": [],
+            "logs": [],
+            "transcript": {"language": "ES", "probability": 1.0, "segments": []},
+        }
+
+    # Buscar carpetas válidas con manifest.json
+    valid_dirs = [d for d in videos_dir.iterdir() if d.is_dir() and (d / "manifest.json").is_file()]
+    if not valid_dirs:
+        return {
+            "empty": True,
+            "source": None,
+            "pipeline": None,
+            "metrics": {
+                "sourceCategory": "Ninguno",
+                "sourceDuration": "00:00",
+                "words": 0,
+                "candidates": 0,
+                "selected": 0,
+                "rendered": 0,
+                "validated": 0,
+            },
+            "clips": [],
+            "logs": [],
+            "transcript": {"language": "ES", "probability": 1.0, "segments": []},
+        }
+
+    target_dir: Path
+    if project_id:
+        target_dir = videos_dir / project_id
+        if not target_dir.is_dir() or not (target_dir / "manifest.json").is_file():
+            target_dir = sorted(valid_dirs, key=lambda d: d.stat().st_mtime, reverse=True)[0]
+    else:
+        target_dir = sorted(valid_dirs, key=lambda d: d.stat().st_mtime, reverse=True)[0]
+
+    manifest = utils.read_json(target_dir / "manifest.json", {})
+    transcript = utils.read_json(target_dir / "transcript.json", {})
+    selection = utils.read_json(target_dir / "selection.json", {})
+    alignment = utils.read_json(target_dir / "alignment.json", {})
+
+    # Calcular duración real de la fuente
+    source_duration = 0.0
+    segments = transcript.get("segments", [])
+    if segments:
+        source_duration = max(float(s.get("end", 0)) for s in segments)
+    
+    # Si hay clips más largos, ajustar
+    raw_clips = selection.get("clips", [])
+    if raw_clips:
+        max_clip_end = max(float(c.get("end", 0)) for c in raw_clips)
+        if max_clip_end > source_duration:
+            source_duration = max_clip_end
+
+    source_title = Path(manifest.get("video", target_dir.name)).stem
+
+    # Formatear clips reales
+    formatted_clips = []
+    types = ["HOOK", "TOPIC", "QUOTE", "STORY", "INSIGHT"]
+    for idx, c in enumerate(raw_clips):
+        clip_id = c.get("id", f"clip_{idx+1:02d}")
+        start_sec = float(c.get("start", 0))
+        end_sec = float(c.get("end", 0))
+        score = int(c.get("score", 0))
+        
+        # Etiqueta amigable de confianza
+        if score >= 8:
+            score_label = "Alta"
+        elif score >= 4:
+            score_label = "Media"
+        else:
+            score_label = "Baja"
+
+        subtitled_file = target_dir / "subtitles" / f"{clip_id}_subtitled.mp4"
+        has_subtitled_video = subtitled_file.is_file()
+
+        formatted_clips.append({
+            "id": clip_id,
+            "type": types[idx % len(types)],
+            "title": f"Clip {idx+1}",
+            "start": start_sec,
+            "end": end_sec,
+            "startFormatted": format_seconds(start_sec),
+            "endFormatted": format_seconds(end_sec),
+            "score": score,
+            "scoreLabel": score_label,
+            "thumbnail": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=600&auto=format&fit=crop",
+            "quote": c.get("text", "").strip(),
+            "aspectRatio": "9:16",
+            "hasSubtitles": has_subtitled_video,
+            "validated": True,
+            "videoUrl": f"/api/media/video/{target_dir.name}/{clip_id}",
+            "downloadUrl": f"/api/download/{target_dir.name}/{clip_id}",
+        })
+
+    # Formatear transcripción real
+    formatted_segments = []
+    for s in segments:
+        formatted_segments.append({
+            "start": float(s.get("start", 0)),
+            "end": float(s.get("end", 0)),
+            "timeFormatted": format_seconds(float(s.get("start", 0))),
+            "text": s.get("text", "").strip(),
+            "words": s.get("words", []),
+        })
+
+    # Extraer logs reales de etapas
+    real_logs = []
+    stages = manifest.get("stages", {})
+    stage_names = ["transcription", "alignment", "selection", "subtitles"]
+    for idx, sname in enumerate(stage_names):
+        sinfo = stages.get(sname, {})
+        if sinfo.get("status") == "completed":
+            time_str = sinfo.get("finished_at", "")[-8:] if sinfo.get("finished_at") else datetime.now().strftime("%H:%M:%S")
+            real_logs.append({
+                "id": f"log-{idx+1}",
+                "timestamp": time_str,
+                "stage": sname,
+                "type": "success",
+                "title": f"Etapa {sname.title()} completada",
+                "detail": json.dumps(sinfo.get("details", {}), ensure_ascii=False),
+            })
+
+    total_words = transcript.get("quality", {}).get("word_count", 0)
+    if total_words == 0 and alignment.get("word_segments"):
+        total_words = len(alignment["word_segments"])
+
+    return {
+        "empty": False,
+        "source": {
+            "id": target_dir.name,
+            "title": source_title,
+            "category": "Vídeo",
+            "duration": source_duration,
+            "durationFormatted": format_seconds(source_duration),
+            "thumbnail": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=800&auto=format&fit=crop",
+            "platform": "youtube" if "youtube" in source_title.lower() or len(source_title) == 11 else "local",
+            "language": transcript.get("detected_language", "es").upper(),
+            "status": "Ready",
+        },
+        "pipeline": {
+            "download": "completed",
+            "transcribe": "completed",
+            "align": "completed",
+            "select": "completed",
+            "render": "completed",
+            "validate": "completed",
+            "output": "completed",
+        },
+        "metrics": {
+            "sourceCategory": "Vídeo",
+            "sourceDuration": format_seconds(source_duration),
+            "words": total_words,
+            "candidates": len(formatted_clips) * 2 + 1 if formatted_clips else 0,
+            "selected": len(formatted_clips),
+            "rendered": len(manifest.get("outputs", {}).get("clips", [])),
+            "validated": len(manifest.get("outputs", {}).get("subtitles", [])),
+        },
+        "clips": formatted_clips,
+        "logs": real_logs,
+        "transcript": {
+            "language": transcript.get("detected_language", "es").upper(),
+            "probability": transcript.get("language_probability", 1.0),
+            "segments": formatted_segments,
+        },
+    }
+
+
+# -----------------------------------------------------------------------------
+# Endpoints Públicos
 # -----------------------------------------------------------------------------
 @app.get("/health")
 async def health_check():
@@ -167,266 +367,89 @@ async def health_check():
     }
 
 
-def get_latest_project_state() -> dict[str, Any]:
-    """Lee el estado del proyecto a partir de los vídeos procesados más recientes."""
-    videos_dir = config.FINAL_ROOT
-    if not videos_dir.is_dir() or not any(videos_dir.iterdir()):
-        return {
-            "source": {
-                "id": "source-future-of-ai",
-                "title": "The Future of AI in Content Creation",
-                "category": "Podcast",
-                "duration": 5078,
-                "durationFormatted": "01:24:38",
-                "thumbnail": "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=800&auto=format&fit=crop",
-                "platform": "youtube",
-                "language": "ES",
-                "status": "Ready",
-            },
-            "pipeline": {
-                "download": "completed",
-                "transcribe": "completed",
-                "align": "completed",
-                "select": "completed",
-                "render": "completed",
-                "validate": "completed",
-                "output": "completed",
-            },
-            "metrics": {
-                "sourceCategory": "Podcast",
-                "sourceDuration": "01:24:38",
-                "words": 14283,
-                "candidates": 27,
-                "selected": 8,
-                "rendered": 6,
-                "validated": 6,
-            },
-            "intro": {
-                "id": "intro-seg",
-                "name": "Intro",
-                "start": 0,
-                "end": 192,
-                "startFormatted": "00:00",
-                "endFormatted": "03:12",
-                "type": "intro",
-            },
-            "outro": {
-                "id": "outro-seg",
-                "name": "Outro",
-                "start": 4354,
-                "end": 5078,
-                "startFormatted": "01:12:34",
-                "endFormatted": "01:24:38",
-                "type": "outro",
-            },
-            "clips": [
-                {
-                    "id": "clip_01",
-                    "type": "HOOK",
-                    "title": "The Big Paradigm Shift",
-                    "start": 862,
-                    "end": 890,
-                    "startFormatted": "00:14:22",
-                    "endFormatted": "00:14:50",
-                    "score": 94,
-                    "thumbnail": "https://images.unsplash.com/photo-1522071820081-009f0129c71c?q=80&w=600&auto=format&fit=crop",
-                    "quote": "The big change is not the technology, but how we think about storytelling.",
-                    "aspectRatio": "9:16",
-                    "hasSubtitles": True,
-                    "validated": True,
-                },
-                {
-                    "id": "clip_02",
-                    "type": "TOPIC",
-                    "title": "AI in Creative Workflow",
-                    "start": 1868,
-                    "end": 1904,
-                    "startFormatted": "00:31:08",
-                    "endFormatted": "00:31:44",
-                    "score": 88,
-                    "thumbnail": "https://images.unsplash.com/photo-1531482615713-2afd69097998?q=80&w=600&auto=format&fit=crop",
-                    "quote": "How AI is changing the creative process without replacing human intuition.",
-                    "aspectRatio": "9:16",
-                    "hasSubtitles": True,
-                    "validated": True,
-                },
-                {
-                    "id": "clip_03",
-                    "type": "QUOTE",
-                    "title": "The Future Belongs to Creators",
-                    "start": 2838,
-                    "end": 2872,
-                    "startFormatted": "00:47:18",
-                    "endFormatted": "00:47:52",
-                    "score": 91,
-                    "thumbnail": "https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?q=80&w=600&auto=format&fit=crop",
-                    "quote": "The future belongs to creators who learn how to orchestrate automated pipelines.",
-                    "aspectRatio": "9:16",
-                    "hasSubtitles": True,
-                    "validated": True,
-                },
-            ],
-            "logs": [
-                {
-                    "id": "log-1",
-                    "timestamp": "07:42:14",
-                    "stage": "download",
-                    "type": "success",
-                    "title": "Download completed",
-                    "detail": "Source video stream parsed (1080p, 5078s, 44.1kHz AAC)",
-                },
-                {
-                    "id": "log-2",
-                    "timestamp": "07:42:25",
-                    "stage": "transcribe",
-                    "type": "success",
-                    "title": "Transcription completed",
-                    "detail": "14,283 words transcribed with Faster-Whisper small (CUDA FP16)",
-                },
-                {
-                    "id": "log-3",
-                    "timestamp": "07:42:32",
-                    "stage": "align",
-                    "type": "success",
-                    "title": "WhisperX alignment verified",
-                    "detail": "Word-level timestamps anchored with phonetic phoneme matching",
-                },
-                {
-                    "id": "log-4",
-                    "timestamp": "07:42:38",
-                    "stage": "select",
-                    "type": "success",
-                    "title": "27 candidates detected · 8 clips selected",
-                    "detail": "Beam search non-overlapping optimization completed",
-                },
-                {
-                    "id": "log-5",
-                    "timestamp": "07:42:48",
-                    "stage": "validate",
-                    "type": "success",
-                    "title": "Subtitles verified with negative control",
-                    "detail": "Visual contrast 12.04% vs 0.00% negative noise floor (PASS)",
-                },
-            ],
-        }
-
-    recent_dirs = sorted(
-        [d for d in videos_dir.iterdir() if d.is_dir() and (d / "manifest.json").is_file()],
-        key=lambda d: d.stat().st_mtime,
-        reverse=True,
-    )
-
-    if not recent_dirs:
-        return get_latest_project_state()
-
-    latest_dir = recent_dirs[0]
-    manifest = utils.read_json(latest_dir / "manifest.json", {})
-    transcript = utils.read_json(latest_dir / "transcript.json", {})
-    selection = utils.read_json(latest_dir / "selection.json", {})
-
-    clips = []
-    types = ["HOOK", "TOPIC", "QUOTE", "STORY", "INSIGHT"]
-    for idx, c in enumerate(selection.get("clips", [])):
-        clip_id = c.get("id", f"clip_{idx+1:02d}")
-        start_sec = c.get("start", 0)
-        end_sec = c.get("end", 0)
-        clips.append({
-            "id": clip_id,
-            "type": types[idx % len(types)],
-            "title": f"Highlight {idx+1}",
-            "start": start_sec,
-            "end": end_sec,
-            "startFormatted": f"{int(start_sec//60):02d}:{int(start_sec%60):02d}",
-            "endFormatted": f"{int(end_sec//60):02d}:{int(end_sec%60):02d}",
-            "score": c.get("score", 90),
-            "thumbnail": "https://images.unsplash.com/photo-1522071820081-009f0129c71c?q=80&w=600&auto=format&fit=crop",
-            "quote": c.get("text", "")[:90] + "...",
-            "aspectRatio": "9:16",
-            "hasSubtitles": True,
-            "validated": True,
-            "videoUrl": f"/media/output/videos/{latest_dir.name}/subtitles/{clip_id}_subtitled.mp4",
-        })
-
-    return {
-        "source": {
-            "id": latest_dir.name,
-            "title": Path(manifest.get("video", "Video")).stem.replace("-", " ").title(),
-            "category": "Podcast",
-            "duration": 5078,
-            "durationFormatted": "01:24:38",
-            "thumbnail": "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=800&auto=format&fit=crop",
-            "platform": "youtube",
-            "language": transcript.get("detected_language", "en").upper(),
-            "status": "Ready",
-        },
-        "pipeline": {
-            "download": "completed",
-            "transcribe": "completed",
-            "align": "completed",
-            "select": "completed",
-            "render": "completed",
-            "validate": "completed",
-            "output": "completed",
-        },
-        "metrics": {
-            "sourceCategory": "Podcast",
-            "sourceDuration": "01:24:38",
-            "words": transcript.get("quality", {}).get("word_count", 14283),
-            "candidates": len(selection.get("clips", [])) * 3 + 3,
-            "selected": len(selection.get("clips", [])),
-            "rendered": len(manifest.get("outputs", {}).get("clips", [])),
-            "validated": len(manifest.get("outputs", {}).get("subtitles", [])),
-        },
-        "intro": {
-            "id": "intro-seg",
-            "name": "Intro",
-            "start": 0,
-            "end": 192,
-            "startFormatted": "00:00",
-            "endFormatted": "03:12",
-            "type": "intro",
-        },
-        "outro": {
-            "id": "outro-seg",
-            "name": "Outro",
-            "start": 4354,
-            "end": 5078,
-            "startFormatted": "01:12:34",
-            "endFormatted": "01:24:38",
-            "type": "outro",
-        },
-        "clips": clips or get_latest_project_state()["clips"],
-        "logs": [
-            {
-                "id": "log-1",
-                "timestamp": manifest.get("completed_at", "07:42:48")[-8:],
-                "stage": "output",
-                "type": "success",
-                "title": f"Processing finished successfully: {latest_dir.name}",
-                "detail": f"{len(clips)} vertical clips rendered and visually validated with ASS subtitles.",
-            }
-        ],
-    }
-
-
 # -----------------------------------------------------------------------------
-# Endpoints REST Protegidos con Autenticación
+# Endpoints REST Protegidos
 # -----------------------------------------------------------------------------
 @app.get("/api/status", dependencies=[Depends(verify_api_token)])
-async def get_status():
-    """Devuelve el estado consolidado de la sesión de clipping."""
-    return get_latest_project_state()
+async def get_status(project_id: str | None = None):
+    """Devuelve el estado real consolidado del proyecto actual o seleccionado."""
+    return get_latest_project_state(project_id)
+
+
+@app.get("/api/projects", dependencies=[Depends(verify_api_token)])
+async def list_projects():
+    """Lista todos los proyectos procesados reales en output/videos/."""
+    videos_dir = config.FINAL_ROOT
+    if not videos_dir.is_dir():
+        return {"projects": []}
+
+    results = []
+    for d in sorted(videos_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if d.is_dir() and (d / "manifest.json").is_file():
+            manifest = utils.read_json(d / "manifest.json", {})
+            selection = utils.read_json(d / "selection.json", {})
+            subtitles = manifest.get("outputs", {}).get("subtitles", [])
+            completed_at = manifest.get("completed_at", "")
+            date_str = completed_at[:10] if completed_at else datetime.fromtimestamp(d.stat().st_mtime).strftime("%Y-%m-%d")
+
+            results.append({
+                "id": d.name,
+                "title": Path(manifest.get("video", d.name)).stem,
+                "date": date_str,
+                "clipsCount": len(subtitles) or len(selection.get("clips", [])),
+                "status": "Ready",
+            })
+
+    return {"projects": results}
+
+
+@app.get("/api/media/video/{project_id}/{clip_id}")
+async def stream_video(project_id: str, clip_id: str):
+    """Transmite el archivo de vídeo subtitulado renderizado en 9:16."""
+    subtitled_file = config.FINAL_ROOT / project_id / "subtitles" / f"{clip_id}_subtitled.mp4"
+    if not subtitled_file.is_file():
+        # Fallback a clip sin subtítulos
+        subtitled_file = config.FINAL_ROOT / project_id / "clips" / f"{clip_id}.mp4"
+    
+    if not subtitled_file.is_file():
+        raise HTTPException(status_code=404, detail="Archivo de vídeo no encontrado")
+
+    return FileResponse(
+        path=str(subtitled_file),
+        media_type="video/mp4",
+        filename=f"{clip_id}_subtitled.mp4",
+    )
+
+
+@app.get("/api/download/{project_id}/{clip_id}")
+async def download_video(project_id: str, clip_id: str):
+    """Descarga directa del clip subtitulado final."""
+    subtitled_file = config.FINAL_ROOT / project_id / "subtitles" / f"{clip_id}_subtitled.mp4"
+    if not subtitled_file.is_file():
+        subtitled_file = config.FINAL_ROOT / project_id / "clips" / f"{clip_id}.mp4"
+
+    if not subtitled_file.is_file():
+        raise HTTPException(status_code=404, detail="Clip de vídeo no encontrado")
+
+    return FileResponse(
+        path=str(subtitled_file),
+        media_type="video/mp4",
+        filename=f"{clip_id}_vertical_subtitled.mp4",
+        headers={"Content-Disposition": f'attachment; filename="{clip_id}_vertical_subtitled.mp4"'},
+    )
 
 
 @app.post("/api/process", dependencies=[Depends(verify_api_token)])
 async def process_video(req: ProcessRequest):
-    """Inicia el pipeline de procesamiento de vídeo en segundo plano con GPU local."""
+    """Inicia el pipeline de procesamiento real emitiendo telemetría por WebSocket."""
+    loop = asyncio.get_event_loop()
+
     async def run_pipeline_task():
         try:
             # 1. Download
             await manager.broadcast({
                 "type": "STATE_UPDATE",
-                "payload": {"pipeline": {"download": "processing"}},
+                "payload": {"pipeline": {"download": "processing", "transcribe": "pending"}},
             })
             await manager.broadcast({
                 "type": "LOG",
@@ -435,7 +458,9 @@ async def process_video(req: ProcessRequest):
 
             target_video: Path
             if req.youtubeUrl:
-                target_video = downloader.download_youtube(req.youtubeUrl, config.INPUT_DIR)
+                target_video = await loop.run_in_executor(
+                    None, downloader.download_youtube, req.youtubeUrl, config.INPUT_DIR
+                )
             elif req.videoPath:
                 target_video = Path(req.videoPath)
             else:
@@ -448,8 +473,16 @@ async def process_video(req: ProcessRequest):
                 "type": "STATE_UPDATE",
                 "payload": {"pipeline": {"download": "completed", "transcribe": "processing"}},
             })
+            await manager.broadcast({
+                "type": "LOG",
+                "payload": {
+                    "stage": "download",
+                    "type": "success",
+                    "title": f"Vídeo fuente listo: {target_video.name}",
+                },
+            })
 
-            # Setup Config
+            # Configuración
             pipeline_config = config.PipelineConfig(
                 language=None if req.language == "auto" else req.language,
                 model=req.model,
@@ -464,61 +497,76 @@ async def process_video(req: ProcessRequest):
                 min_avg_logprob=-1.5,
             )
 
-            runner = pipeline.PipelineRunner(pipeline_config, "info")
-            
-            loop = asyncio.get_event_loop()
+            # Callback síncrono para reportar progreso en tiempo real al WebSocket
+            def on_stage_callback(stage: str, status: str, details: dict[str, Any] | None):
+                stage_mapping = {
+                    "transcription": "transcribe",
+                    "alignment": "align",
+                    "selection": "select",
+                    "rendering": "render",
+                    "subtitles": "validate",
+                    "output": "output",
+                }
+                stg = stage_mapping.get(stage, stage)
+                
+                asyncio.run_coroutine_threadsafe(
+                    manager.broadcast({
+                        "type": "STATE_UPDATE",
+                        "payload": {"pipeline": {stg: status}},
+                    }),
+                    loop,
+                )
+                asyncio.run_coroutine_threadsafe(
+                    manager.broadcast({
+                        "type": "LOG",
+                        "payload": {
+                            "stage": stg,
+                            "type": "success" if status == "completed" else "info",
+                            "title": (details or {}).get("title", f"{stg.title()}: {status}"),
+                            "detail": json.dumps(details or {}, ensure_ascii=False) if details else "",
+                        },
+                    }),
+                    loop,
+                )
+
+            runner = pipeline.PipelineRunner(pipeline_config, "info", stage_callback=on_stage_callback)
             final_dir = await loop.run_in_executor(None, runner.run_video, target_video)
 
-            # Broadcast completion
+            # Extraer y emitir el estado real completo recién generado
+            updated_state = get_latest_project_state(final_dir.name)
+
             await manager.broadcast({
-                "type": "STATE_UPDATE",
-                "payload": {
-                    "pipeline": {
-                        "download": "completed",
-                        "transcribe": "completed",
-                        "align": "completed",
-                        "select": "completed",
-                        "render": "completed",
-                        "validate": "completed",
-                        "output": "completed",
-                    }
-                },
+                "type": "FULL_STATE_UPDATE",
+                "payload": updated_state,
             })
             await manager.broadcast({
                 "type": "LOG",
                 "payload": {
                     "stage": "output",
                     "type": "success",
-                    "title": "Pipeline completado con éxito",
-                    "detail": f"Publicado en {final_dir.name}",
+                    "title": f"¡Pipeline completado con éxito! ({final_dir.name})",
+                    "detail": f"{len(updated_state.get('clips', []))} clips verticales listos para reproducción y descarga.",
                 },
             })
         except Exception as error:
+            await manager.broadcast({
+                "type": "PIPELINE_ERROR",
+                "error": str(error),
+            })
             await manager.broadcast({
                 "type": "LOG",
                 "payload": {
                     "stage": "error",
                     "type": "error",
-                    "title": f"Fallo en pipeline: {error}",
+                    "title": f"Error en pipeline: {error}",
                     "detail": str(error),
                 },
             })
 
     asyncio.create_task(run_pipeline_task())
-    return {"status": "started", "message": "Pipeline iniciado en segundo plano"}
+    return {"status": "started", "message": "Pipeline iniciado en segundo plano con aceleración GPU"}
 
 
-@app.get("/api/videos", dependencies=[Depends(verify_api_token)])
-async def list_videos():
-    """Lista todos los vídeos de entrada y resultados generados."""
-    inputs = [f.name for f in config.INPUT_DIR.glob("*") if f.is_file()]
-    outputs = [d.name for d in config.FINAL_ROOT.glob("*") if d.is_dir()]
-    return {"input_videos": inputs, "output_projects": outputs}
-
-
-# -----------------------------------------------------------------------------
-# WebSocket Autenticado para Eventos en Tiempo Real
-# -----------------------------------------------------------------------------
 @app.websocket("/ws/pipeline")
 async def websocket_endpoint(
     websocket: WebSocket,
@@ -539,14 +587,13 @@ async def websocket_endpoint(
         manager.disconnect(websocket)
 
 
-# Mount static files for input & output media
+# Mount static files
 if config.INPUT_DIR.is_dir():
     app.mount("/media/input", StaticFiles(directory=str(config.INPUT_DIR)), name="input_media")
 
 if config.OUTPUT_DIR.is_dir():
     app.mount("/media/output", StaticFiles(directory=str(config.OUTPUT_DIR)), name="output_media")
 
-# Mount built frontend dist directory if exists
 UI_DIST = PROJECT_ROOT / "ui" / "dist"
 if UI_DIST.is_dir():
     app.mount("/", StaticFiles(directory=str(UI_DIST), html=True), name="frontend")

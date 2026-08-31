@@ -14,7 +14,15 @@ import { ProjectsModal } from './modals/ProjectsModal';
 import { usePipelineStore } from '../store/usePipelineStore';
 
 export const AppShell: React.FC = () => {
-  const { fetchInitialState, updateStateFromWs, addLog, getWsUrl, apiBaseUrl, apiToken } = usePipelineStore();
+  const {
+    fetchInitialState,
+    updateStateFromWs,
+    setFullState,
+    addLog,
+    getWsUrl,
+    apiBaseUrl,
+    apiToken,
+  } = usePipelineStore();
 
   useEffect(() => {
     fetchInitialState();
@@ -28,10 +36,20 @@ export const AppShell: React.FC = () => {
       ws.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
-          if (message.type === 'STATE_UPDATE') {
+          if (message.type === 'FULL_STATE_UPDATE') {
+            setFullState(message.payload);
+          } else if (message.type === 'STATE_UPDATE') {
             updateStateFromWs(message.payload);
           } else if (message.type === 'LOG') {
             addLog(message.payload);
+          } else if (message.type === 'PIPELINE_ERROR') {
+            usePipelineStore.setState({ isProcessing: false });
+            addLog({
+              stage: 'error',
+              type: 'error',
+              title: 'Error en el pipeline',
+              detail: message.error || 'Ocurrió un error inesperado.',
+            });
           }
         } catch {
           // Ignored
@@ -39,7 +57,7 @@ export const AppShell: React.FC = () => {
       };
 
       ws.onerror = () => {
-        // Backend WebSocket not active yet, fallback to local demo store
+        // Fallback
       };
     } catch {
       // Ignored
@@ -48,7 +66,7 @@ export const AppShell: React.FC = () => {
     return () => {
       if (ws) ws.close();
     };
-  }, [fetchInitialState, updateStateFromWs, addLog, getWsUrl, apiBaseUrl, apiToken]);
+  }, [fetchInitialState, updateStateFromWs, setFullState, addLog, getWsUrl, apiBaseUrl, apiToken]);
 
   return (
     <div className="w-full max-w-[1600px] min-h-[92vh] max-h-[98vh] bg-[#3B3D40] p-2.5 sm:p-4 rounded-[40px] sm:rounded-[48px] shadow-2xl flex flex-col justify-between border border-[#4F5155]/60 overflow-hidden">
@@ -57,7 +75,7 @@ export const AppShell: React.FC = () => {
         {/* 1. Header */}
         <Header />
 
-        {/* 2. Top Area Workspace: Source Card (30%) + Metrics & Pipeline Status (70%) */}
+        {/* 2. Top Area Workspace: Source Card + Metrics & Pipeline Status */}
         <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 items-stretch">
           {/* Source Card */}
           <div className="lg:col-span-4 flex">
@@ -65,7 +83,7 @@ export const AppShell: React.FC = () => {
           </div>
 
           {/* Metrics & Pipeline Status Card */}
-          <div className="lg:col-span-8 bg-[#F8F8F4] border border-[#D5D5CF]/80 rounded-[28px] sm:rounded-[32px] p-4 sm:p-5 flex flex-col justify-between shadow-sm">
+          <div className="lg:col-span-8 bg-[#F8F8F4] border border-[#D5D5CF]/80 rounded-[28px] sm:rounded-[32px] p-4 sm:p-5 flex flex-col justify-between shadow-xs">
             <MetricsPanel />
             <PipelineStatus />
           </div>

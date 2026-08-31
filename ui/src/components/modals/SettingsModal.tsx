@@ -6,7 +6,6 @@ export const SettingsModal: React.FC = () => {
   const {
     isSettingsOpen,
     toggleSettingsModal,
-    state,
     apiBaseUrl,
     setApiBaseUrl,
     apiToken,
@@ -16,12 +15,12 @@ export const SettingsModal: React.FC = () => {
     isConnected,
   } = usePipelineStore();
 
-  const [model, setModel] = useState(state.config.model);
-  const [device, setDevice] = useState(state.config.device);
-  const [minDuration, setMinDuration] = useState(state.config.minDuration);
-  const [maxDuration, setMaxDuration] = useState(state.config.maxDuration);
-  const [maxClips, setMaxClips] = useState(state.config.maxClips);
-  const [subtitleMargin, setSubtitleMargin] = useState(state.config.subtitleMarginRatio);
+  const [model, setModel] = useState('small');
+  const [device, setDevice] = useState('cuda');
+  const [minDuration, setMinDuration] = useState(18);
+  const [maxDuration, setMaxDuration] = useState(45);
+  const [maxClips, setMaxClips] = useState(8);
+  const [subtitleMargin, setSubtitleMargin] = useState(0.27);
 
   const [inputUrl, setInputUrl] = useState(apiBaseUrl);
   const [inputToken, setInputToken] = useState(apiToken);
